@@ -9,6 +9,7 @@
 // @version     2.6
 // @author      Viki <hi@viki.moe> (https://github.com/vikiboss)
 // @description 显示 booth.pm 上日元价格对应的人民币价格，使用实时汇率 API
+// @license     MIT
 // ==/UserScript==
 
 (async () => {
