@@ -6,7 +6,7 @@
 // @grant       GM_setValue
 // @grant       GM_getValue
 // @connect     60s-api.viki.moe
-// @version     2.6
+// @version     2.7
 // @author      Viki <hi@viki.moe> (https://github.com/vikiboss)
 // @description 显示 booth.pm 上日元价格对应的人民币价格，使用实时汇率 API
 // @license     MIT
