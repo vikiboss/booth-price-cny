@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JPY to CNY Price Converter (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @description  在网页上显示日元价格对应的人民币价格，零价格显示"免费"并添加下划线
 // @author       AI Assistant
 // @match        https://booth.pm/*
@@ -48,7 +48,7 @@
         if (isZero) {
             return '免费';
         }
-        return `${Math.round(jpy * exchangeRate)} CNY`;
+        return `${Math.round(jpy * exchangeRate*100) / 100} CNY`;
     }
 
     // 添加CSS样式
