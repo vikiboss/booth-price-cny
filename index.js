@@ -1,470 +1,357 @@
 // ==UserScript==
-// @name        booth.pm 人民币价格显示
-// @namespace   Violentmonkey Scripts
-// @match       https://booth.pm/*
-// @grant       GM_xmlhttpRequest
-// @grant       GM_setValue
-// @grant       GM_getValue
-// @connect     60s-api.viki.moe
-// @version     2.7
-// @author      Viki <hi@viki.moe> (https://github.com/vikiboss)
-// @description 显示 booth.pm 上日元价格对应的人民币价格，使用实时汇率 API
-// @license     MIT
-// @downloadURL https://update.greasyfork.org/scripts/532153/boothpm%20%E4%BA%BA%E6%B0%91%E5%B8%81%E4%BB%B7%E6%A0%BC%E6%98%BE%E7%A4%BA.user.js
-// @updateURL https://update.greasyfork.org/scripts/532153/boothpm%20%E4%BA%BA%E6%B0%91%E5%B8%81%E4%BB%B7%E6%A0%BC%E6%98%BE%E7%A4%BA.meta.js
+// @name         JPY to CNY Price Converter (Optimized)
+// @namespace    http://tampermonkey.net/
+// @version      3.0
+// @description  在网页上显示日元价格对应的人民币价格，零价格显示"免费"并添加下划线
+// @author       AI Assistant
+// @match        https://booth.pm/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      60s-api.viki.moe
 // ==/UserScript==
 
-;(async () => {
-  // 在文档头部注入样式
-  const injectStyles = () => {
-    const styleElement = document.createElement('style')
-    styleElement.textContent = `
-      .booth-free-badge {
-        display: inline-flex;
-        align-items: center;
-        font-weight: 600;
-        font-size: 0.95em;
-        padding: 0.15em 0.5em;
-        border-radius: 4px;
-        background: linear-gradient(135deg, #ff7043, #ff5252);
-        color: white;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-        text-shadow: 0 1px 1px rgba(0,0,0,0.1);
-        margin: 0 0.15em;
-        position: relative;
-        overflow: hidden;
-        transform: translateZ(0);
-      }
+(function() {
+    'use strict';
 
-      .booth-free-badge::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: -100%;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-        animation: shine 2s infinite;
-      }
+    // 配置
+    const CACHE_KEY = 'jpy_to_cny_rate';
+    const CACHE_DATE_KEY = 'jpy_to_cny_date';
+    const DEFAULT_RATE = 0.05; // 默认汇率 1:20
+    const PROCESSED_MARK = 'data-jpy-processed';
+    const ZERO_PRICE_MARK = 'data-zero-price';
 
-      @keyframes shine {
-        0% { left: -100%; }
-        20% { left: 100%; }
-        100% { left: 100%; }
-      }
+    // 全局变量
+    let exchangeRate = DEFAULT_RATE;
+    let debugMode = false; // 调试模式，设为false减少日志输出
 
-      .booth-jpy-note {
-        font-size: 0.85em;
-        opacity: 0.8;
-        margin-left: 0.3em;
-      }
-
-      .booth-cny-price {
-        display: inline-block;
-        color: #119da4;
-        font-weight: 500;
-        font-size: 0.9em;
-      }
-
-      /* 价格筛选器样式 */
-      .booth-filter-cny {
-        display: block;
-        color: #119da4;
-        font-size: 0.85em;
-        margin-top: 2px;
-      }
-    `
-    document.head.appendChild(styleElement)
-  }
-
-  // 计算当天结束时间（23:59:59.999）的时间戳
-  const getTodayEndTimestamp = () => {
-    const today = new Date()
-    const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999)
-    return todayEnd.getTime()
-  }
-
-  // 获取汇率（优先使用缓存，每天更新一次）
-  const getExchangeRate = () => {
-    return new Promise((resolve) => {
-      // 检查缓存是否存在且当天有效
-      const cachedRate = GM_getValue('jpy_to_cny_rate')
-      const cacheTimestamp = GM_getValue('jpy_to_cny_rate_timestamp')
-      const cacheExpiry = GM_getValue('jpy_to_cny_rate_expiry')
-
-      // 如果有缓存且未过期
-      if (cachedRate && cacheExpiry && Date.now() < cacheExpiry) {
-        console.log(`汇率数据(缓存): 1 JPY = ${cachedRate} CNY，获取时间: ${new Date(cacheTimestamp).toLocaleString()}`)
-        resolve({
-          rate: parseFloat(cachedRate),
-          isFromCache: true,
-          timestamp: cacheTimestamp,
-        })
-        return
-      }
-
-      // 缓存过期或不存在，请求新数据
-      const requestTime = Date.now()
-      console.log(`请求最新汇率数据，时间: ${new Date(requestTime).toLocaleString()}`)
-
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: 'https://60s-api.viki.moe/v2/exchange_rate?currency=jpy',
-        responseType: 'json',
-        onload: (response) => {
-          try {
-            const data = response.response
-            const responseTime = Date.now()
-
-            if (data && data.code === 200) {
-              // 查找日元到人民币的汇率
-              const cnyRate = data.data.rates.find((item) => item.currency === 'CNY')?.rate || 0.05
-
-              // 保存到GM缓存，设置到当天结束过期
-              GM_setValue('jpy_to_cny_rate', cnyRate.toString())
-              GM_setValue('jpy_to_cny_rate_timestamp', responseTime)
-              GM_setValue('jpy_to_cny_rate_expiry', getTodayEndTimestamp())
-
-              console.log(
-                `汇率数据(最新): 1 JPY = ${cnyRate} CNY，获取时间: ${new Date(responseTime).toLocaleString()}`,
-              )
-              resolve({
-                rate: cnyRate,
-                isFromCache: false,
-                timestamp: responseTime,
-              })
-              return
-            }
-
-            // API返回格式不正确，使用默认汇率
-            console.error('汇率API返回数据格式不正确，使用默认汇率')
-            resolve({
-              rate: 0.05,
-              isFromCache: false,
-              timestamp: responseTime,
-            })
-          } catch (error) {
-            console.error('解析汇率数据失败:', error)
-            resolve({
-              rate: 0.05,
-              isFromCache: false,
-              timestamp: Date.now(),
-            })
-          }
-        },
-        onerror: (error) => {
-          console.error('汇率API请求失败:', error)
-          resolve({
-            rate: 0.05,
-            isFromCache: false,
-            timestamp: Date.now(),
-          })
-        },
-        ontimeout: () => {
-          console.error('汇率API请求超时')
-          resolve({
-            rate: 0.05,
-            isFromCache: false,
-            timestamp: Date.now(),
-          })
-        },
-        timeout: 5000, // 5秒超时
-      })
-    })
-  }
-
-  // 格式化日元转换为人民币的金额
-  const formatCnyAmount = (jpyAmount, exchangeRate) => {
-    if (!jpyAmount || isNaN(jpyAmount)) return '0'
-    return (jpyAmount * exchangeRate).toFixed(2).replace(/\.00$/, '')
-  }
-
-  // 提取数字金额
-  const extractAmountFromText = (text) => {
-    // 提取纯数字部分，去除千位分隔符等
-    const matches = text.match(/\d+(?:,\d+)*/)
-    if (matches && matches[0]) {
-      return parseInt(matches[0].replace(/,/g, ''))
+    // 日志输出
+    function log(message, data) {
+        if (debugMode) {
+            console.log(`[JPY2CNY] ${message}`, data || '');
+        }
     }
-    return 0
-  }
 
-  // 检查元素是否已被处理
-  const isElementProcessed = (element) => {
-    return element && element.dataset && element.dataset.priceProcessed === 'true'
-  }
-
-  // 注入样式
-  injectStyles()
-
-  // 获取汇率
-  const { rate: exchangeRate } = await getExchangeRate()
-
-  // 处理价格筛选器
-  const processPriceFilter = () => {
-    try {
-      // 查找价格筛选器部分
-      const priceFilters = document.querySelectorAll('.flex.w-full.justify-between')
-
-      priceFilters.forEach((filterContainer) => {
-        // 查找价格标签（一般是左右两个价格）
-        const priceLabels = filterContainer.querySelectorAll('div')
-
-        for (const priceLabel of priceLabels) {
-          // 检查是否包含价格格式 "¥xxx"
-          if (priceLabel.textContent.includes('¥')) {
-            // 先移除已存在的人民币价格标签，避免重复添加
-            const existingCnyElement = priceLabel.querySelector('.booth-filter-cny')
-            if (existingCnyElement) {
-              existingCnyElement.remove()
-            }
-
-            const jpyText = priceLabel.textContent
-            const jpyAmount = extractAmountFromText(jpyText)
-
-            // 是否为0价格
-            if (jpyAmount === 0 && !jpyText.includes('Free')) {
-              // 保存原始内容
-              const originalText = priceLabel.textContent
-
-              // 清空内容以重建
-              priceLabel.innerHTML = ''
-
-              if (originalText.trim() === '¥0') {
-                // 创建"Free"徽章
-                const freeBadge = document.createElement('span')
-                freeBadge.className = 'booth-free-badge'
-                freeBadge.style.fontSize = '0.75em'
-                freeBadge.style.padding = '0.1em 0.35em'
-                freeBadge.textContent = 'FREE'
-                priceLabel.appendChild(freeBadge)
-              } else {
-                // 可能是价格范围中的一部分，保留原文本
-                priceLabel.textContent = originalText
-              }
-            } else {
-              // 非0价格，添加CNY价格
-              const cnyAmount = formatCnyAmount(jpyAmount, exchangeRate)
-
-              // 保存原始文本内容
-              const originalText = priceLabel.textContent
-
-              // 重建价格显示结构
-              priceLabel.innerHTML = ''
-
-              // 原JPY价格
-              const jpySpan = document.createElement('span')
-              jpySpan.textContent = originalText
-              priceLabel.appendChild(jpySpan)
-
-              // CNY价格（在下方显示）
-              const cnySpan = document.createElement('span')
-              cnySpan.className = 'booth-filter-cny'
-              cnySpan.textContent = `￥${cnyAmount}`
-              priceLabel.appendChild(cnySpan)
-            }
-          }
-        }
-
-        // 不再使用dataset标记，因为滑块变动时需要重新处理相同元素
-      })
-    } catch (error) {
-      console.error('处理价格筛选器时出错:', error)
+    // 获取今天的日期字符串 YYYY-MM-DD
+    function getTodayString() {
+        const today = new Date();
+        return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     }
-  }
 
-  // 处理普通的价格文本
-  const processRegularPrices = () => {
-    try {
-      // 匹配两种常见的价格格式
-      const jpyRegex = /^(\s*)(\d+(?:,\d+)*)(\s*)JPY(\s*)(~)?(\s*)$/i
-      const yenRegex = /^(\s*)¥\s*(\d+(?:,\d+)*)(\s*)(~)?(\s*)$/
+    // 解析价格
+    function parsePrice(price) {
+        return parseFloat(price.replace(/[,\s]/g, ''));
+    }
 
-      // 遍历文本节点
-      const treeWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: (node) => {
-          // 检查节点及其父节点是否存在
-          if (!node || !node.parentNode) {
-            return NodeFilter.FILTER_REJECT
-          }
+    // 格式化人民币金额
+    function formatCNY(jpy, isZero) {
+        if (isZero) {
+            return '免费';
+        }
+        return `${Math.round(jpy * exchangeRate)} CNY`;
+    }
 
-          // 跳过脚本、样式等标签内的文本
-          if (node.parentNode.tagName?.match(/^(SCRIPT|STYLE|TEXTAREA|OPTION)$/i)) {
-            return NodeFilter.FILTER_REJECT
-          }
+    // 添加CSS样式
+    function addGlobalStyle() {
+        const styleElement = document.createElement('style');
+        styleElement.textContent = `
+            [${ZERO_PRICE_MARK}="true"] {
+                text-decoration: underline;
+                text-decoration-style: solid;
+                text-decoration-color: #ff9900;
+                text-decoration-thickness: 2px;
+            }
+        `;
+        document.head.appendChild(styleElement);
+    }
 
-          // 检查是否已处理 - 安全地访问dataset
-          if (node.parentNode.dataset && node.parentNode.dataset.priceProcessed === 'true') {
-            return NodeFilter.FILTER_REJECT
-          }
+    // 获取汇率（带缓存）
+    async function getExchangeRate() {
+        const cachedRate = GM_getValue(CACHE_KEY);
+        const cachedDate = GM_getValue(CACHE_DATE_KEY);
+        const todayString = getTodayString();
 
-          // 检查节点值是否存在
-          if (!node.nodeValue) {
-            return NodeFilter.FILTER_REJECT
-          }
+        // 如果缓存有效且是今天的数据，直接使用缓存
+        if (cachedRate && cachedDate === todayString) {
+            log(`使用缓存汇率: ${cachedRate}`);
+            return cachedRate;
+        }
 
-          // 检查是否包含价格格式
-          if (jpyRegex.test(node.nodeValue) || yenRegex.test(node.nodeValue)) {
-            return NodeFilter.FILTER_ACCEPT
-          }
+        // 尝试获取新汇率
+        return new Promise((resolve) => {
+            log('开始请求汇率API...');
 
-          return NodeFilter.FILTER_SKIP
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: 'https://60s-api.viki.moe/v2/exchange_rate?currency=jpy',
+                timeout: 5000,
+                onload: function(response) {
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        const cnyRate = data?.data?.rates?.find(r => r.currency === 'CNY')?.rate;
+
+                        if (cnyRate) {
+                            log(`获取到新汇率: ${cnyRate}`);
+                            GM_setValue(CACHE_KEY, cnyRate);
+                            GM_setValue(CACHE_DATE_KEY, todayString);
+                            resolve(cnyRate);
+                        } else {
+                            resolve(cachedRate || DEFAULT_RATE);
+                        }
+                    } catch (error) {
+                        resolve(cachedRate || DEFAULT_RATE);
+                    }
+                },
+                onerror: function() {
+                    resolve(cachedRate || DEFAULT_RATE);
+                }
+            });
+        });
+    }
+
+    // 处理文本节点中的价格
+    function processTextNode(node) {
+ if (node.nodeType !== Node.TEXT_NODE) return false;
+
+    const text = node.nodeValue;
+    if (!text || text.trim() === '') return false;
+
+    // 防止重复处理，检查是否已包含CNY或免费字样
+    if (text.includes('CNY') || text.includes('免费')) return false;
+
+    // 修复后的正则表达式和处理逻辑
+    const patterns = [
+        // 匹配 "数字 JPY" 格式
+        {
+            regex: /(\d[\d,]+|\d+)\s*JPY/gi,
+            process: function(text) {
+                return text.replace(/(\d[\d,]+|\d+)\s*JPY/gi, function(match) {
+                    // 提取纯数字部分
+                    const priceDigits = match.replace(/[^\d]/g, '');
+                    const jpyValue = parseFloat(priceDigits);
+                    const isZero = jpyValue === 0;
+
+                    // 标记零价格，供后续添加样式
+                    node._hasZeroPrice = isZero;
+                    node._price = jpyValue;
+
+                    return `${match} (${formatCNY(jpyValue, isZero)})`;
+                });
+            }
         },
-      })
+        // 匹配 "¥数字" 格式 - 修复了正则表达式
+        {
+            regex: /¥\s*(\d[\d,]*)/g, // 改为与替换正则一致
+            process: function(text) {
+                return text.replace(/¥\s*(\d[\d,]*)/g, function(match, digits) {
+                    // 提取纯数字部分
+                    const priceDigits = digits.replace(/[,\s]/g, '');
+                    const jpyValue = parseFloat(priceDigits);
+                    const isZero = jpyValue === 0;
 
-      // 需要处理的节点
-      const nodesToProcess = []
-      let node
-      while ((node = treeWalker.nextNode())) {
-        if (node && node.parentNode) {
-          nodesToProcess.push(node)
+                    // 标记零价格，供后续添加样式
+                    node._hasZeroPrice = isZero;
+                    node._price = jpyValue;
+
+                    return `${match}（${formatCNY(jpyValue, isZero)}）`;
+                });
+            }
         }
-      }
+    ];
 
-      // 处理收集的节点
-      for (const textNode of nodesToProcess) {
-        // 再次检查节点是否有效
-        if (!textNode || !textNode.parentNode || !textNode.nodeValue) continue
+        let newText = text;
+        let modified = false;
 
-        const text = textNode.nodeValue
-        let match = text.match(jpyRegex)
-        let isJPY = true
-
-        if (!match) {
-          match = text.match(yenRegex)
-          isJPY = false
-          if (!match) continue // 没有匹配到任何价格格式
+        // 依次尝试每个匹配模式
+        for (const pattern of patterns) {
+            if (pattern.regex.test(text)) {
+                // 使用分离的处理函数改变文本
+                const processed = pattern.process(text);
+                newText = processed;
+                modified = true;
+                break;
+            }
         }
 
-        const [_, leading, amount, middle, trailing1, tilde, trailing2] = match
-        const tildeStr = tilde || ''
+        // 如果文本被修改，更新节点并设置样式
+        if (modified) {
+            node.nodeValue = newText;
 
-        // 解析价格金额
-        const jpyAmount = parseInt(amount.replace(/,/g, ''))
+            // 找到合适的父元素进行缩放和样式设置
+            let parent = findAppropriateParent(node);
 
-        // 处理0金额 - 显示Free
-        if (jpyAmount === 0) {
-          const fragment = document.createDocumentFragment()
+            if (parent) {
+                // 应用变换和样式
+                applyStyles(parent, node._hasZeroPrice);
 
-          // 添加前导空白
-          if (leading) {
-            fragment.appendChild(document.createTextNode(leading))
-          }
+                // 存储价格信息，用于后续检查
+                parent._priceInfo = {
+                    isZero: node._hasZeroPrice,
+                    price: node._price
+                };
 
-          // 创建Free徽章
-          const freeBadge = document.createElement('span')
-          freeBadge.className = 'booth-free-badge'
-          freeBadge.textContent = 'FREE'
-          fragment.appendChild(freeBadge)
+                return true;
+            }
+        }
 
-          // 添加JPY标注（仅对JPY格式）
-          if (isJPY) {
-            const jpyNote = document.createElement('span')
-            jpyNote.className = 'booth-jpy-note'
-            jpyNote.textContent = '(0 JPY)'
-            fragment.appendChild(jpyNote)
-          }
+        return false;
+    }
 
-          // 添加尾随文本
-          const trailing = `${trailing1 || ''}${tildeStr}${trailing2 || ''}`
-          if (trailing) {
-            fragment.appendChild(document.createTextNode(trailing))
-          }
+    // 查找适合应用样式的父元素
+    function findAppropriateParent(node) {
+        if (!node || !node.parentElement) return null;
 
-          // 替换原节点
-          textNode.parentNode.replaceChild(fragment, textNode)
+        // 从当前节点开始向上查找
+        let parent = node.parentElement;
+
+        // 跳过简单的内联元素
+        while (parent && ['SPAN', 'STRONG', 'B', 'I', 'EM'].includes(parent.tagName) &&
+              parent.childNodes.length === 1) {
+            parent = parent.parentElement;
+        }
+
+        // 检查是否已有之前处理过的父元素
+        let current = parent;
+        while (current) {
+            if (current.hasAttribute(PROCESSED_MARK)) {
+                // 更新已处理元素的零价格状态
+                updateZeroPriceStatus(current, node._hasZeroPrice);
+                return current;
+            }
+            current = current.parentElement;
+        }
+
+        return parent;
+    }
+
+    // 更新元素的零价格状态
+    function updateZeroPriceStatus(element, isZero) {
+        if (isZero) {
+            element.setAttribute(ZERO_PRICE_MARK, 'true');
         } else {
-          // 非0价格 - 添加CNY转换
-          const cnyAmount = formatCnyAmount(jpyAmount, exchangeRate)
+            element.removeAttribute(ZERO_PRICE_MARK);
+        }
+    }
 
-          if (isJPY) {
-            // JPY格式
-            textNode.nodeValue = `${leading}${amount}${middle}JPY (${cnyAmount} CNY)${trailing1}${tildeStr}${trailing2}`
-          } else {
-            // ¥格式
-            const fragment = document.createDocumentFragment()
+    // 应用样式到元素
+    function applyStyles(element, isZero) {
+        if (!element.hasAttribute(PROCESSED_MARK)) {
+            element.setAttribute(PROCESSED_MARK, 'true');
+            element.style.transform = 'scale(0.8)';
+            element.style.transformOrigin = 'left center';
 
-            // 添加前导空白
-            if (leading) {
-              fragment.appendChild(document.createTextNode(leading))
+            // 确保正确显示
+            if (getComputedStyle(element).display === 'inline') {
+                element.style.display = 'inline-block';
             }
-
-            // 原始价格
-            const jpySpan = document.createElement('span')
-            jpySpan.textContent = `¥${amount}`
-            fragment.appendChild(jpySpan)
-
-            // CNY价格
-            const cnySpan = document.createElement('span')
-            cnySpan.className = 'booth-cny-price'
-            cnySpan.textContent = ` (￥${cnyAmount})`
-            fragment.appendChild(cnySpan)
-
-            // 添加尾随文本
-            const trailing = `${trailing1 || ''}${tildeStr}${trailing2 || ''}`
-            if (trailing) {
-              fragment.appendChild(document.createTextNode(trailing))
-            }
-
-            // 替换原节点
-            textNode.parentNode.replaceChild(fragment, textNode)
-          }
         }
 
-        // 安全地标记为已处理
-        if (textNode.parentNode && textNode.parentNode.dataset) {
-          textNode.parentNode.dataset.priceProcessed = 'true'
+        // 设置零价格标记
+        updateZeroPriceStatus(element, isZero);
+    }
+
+    // 处理DOM元素
+    function processElement(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+
+        // 跳过不需要处理的元素
+        if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME'].includes(element.tagName)) {
+            return;
         }
-      }
-    } catch (error) {
-      console.error('处理常规价格时出错:', error)
+
+        // 使用TreeWalker查找所有文本节点
+        const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: function(node) {
+                    // 过滤掉空文本节点
+                    return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+                }
+            },
+            false
+        );
+
+        const nodesToProcess = [];
+        let textNode;
+        while (textNode = walker.nextNode()) {
+            nodesToProcess.push(textNode);
+        }
+
+        // 处理收集到的文本节点
+        nodesToProcess.forEach(processTextNode);
     }
-  }
 
-  // 处理所有价格
-  const processAllPrices = () => {
-    try {
-      // 先处理筛选器
-      processPriceFilter()
+    // 设置DOM变化监听器
+    function observeDOM() {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach(mutation => {
+                // 处理新添加的节点
+                if (mutation.type === 'childList' && mutation.addedNodes.length) {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            processElement(node);
+                        } else if (node.nodeType === Node.TEXT_NODE && node.parentNode) {
+                            processTextNode(node);
+                        }
+                    });
+                }
+                // 处理文本变化
+                else if (mutation.type === 'characterData') {
+                    // 如果文本节点变化，重新处理
+                    processTextNode(mutation.target);
 
-      // 再处理常规价格文本
-      processRegularPrices()
-    } catch (error) {
-      console.error('处理价格时发生未捕获错误:', error)
+                    // 找到处理过这个节点的父元素，检查并更新状态
+                    let parent = mutation.target.parentElement;
+                    while (parent) {
+                        if (parent._priceInfo) {
+                            const oldState = parent._priceInfo.isZero;
+                            const newState = mutation.target._hasZeroPrice;
+
+                            // 如果零价格状态改变，更新样式
+                            if (oldState !== newState) {
+                                updateZeroPriceStatus(parent, newState);
+                                parent._priceInfo.isZero = newState;
+                            }
+                            break;
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
     }
-  }
 
-  // 监听DOM变化
-  const observer = new MutationObserver((mutations) => {
-    // 延迟50ms执行处理，避免频繁触发
-    setTimeout(processAllPrices, 50)
-  })
+    // 初始化函数
+    async function init() {
+        try {
+            // 添加全局样式
+            addGlobalStyle();
 
-  // 页面初始化
-  const initialize = () => {
-    try {
-      // 处理当前页面价格
-      processAllPrices()
+            // 获取汇率
+            exchangeRate = await getExchangeRate();
+            log(`使用汇率: ${exchangeRate}`);
 
-      // 开始监听DOM变化
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: false,
-      })
+            // 处理当前页面
+            processElement(document.body);
 
-      // 对于AJAX加载内容，设置定期检查
-      setInterval(processAllPrices, 1500)
-    } catch (error) {
-      console.error('初始化脚本时出错:', error)
+            // 设置监听器
+            observeDOM();
+        } catch (error) {
+            log(`初始化错误: ${error.message}`, error);
+        }
     }
-  }
 
-  // 根据页面加载状态决定何时初始化
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize)
-  } else {
-    initialize()
-  }
-})()
+    // 启动脚本
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
