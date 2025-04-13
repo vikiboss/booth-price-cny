@@ -2,13 +2,14 @@
 // @name         Booth 价格换算（JPY -> CNY）
 // @namespace    http://tampermonkey.net/
 // @homepage     https://github.com/vikiboss/booth-price-cny
-// @version      3.1
+// @version      3.2
 // @description  在 Booth 平台上显示日元换算后的人民币价格，0 显示"免费"并添加下划线
 // @author       Viki <hi@viki.moe> (https://github.com/vikiboss)
 // @match        https://booth.pm/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @connect      60s.viki.moe
 // @connect      60s-api.viki.moe
 // ==/UserScript==
 
