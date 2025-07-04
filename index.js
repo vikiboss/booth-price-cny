@@ -5,7 +5,7 @@
 // @version      3.2
 // @description  在 Booth 平台上显示日元换算后的人民币价格，0 显示"免费"并添加下划线
 // @author       Viki <hi@viki.moe> (https://github.com/vikiboss)
-// @match        https://booth.pm/*
+// @match        https://*.booth.pm/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
